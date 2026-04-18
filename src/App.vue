@@ -9,6 +9,8 @@ import ApiDetail from './components/ApiDetail.vue'
 import type { ApiRecord } from './components/ApiDetail.vue'
 import MaterialScanner from './components/MaterialScanner.vue'
 import TorqueInteraction from './components/TorqueInteraction.vue'
+import SimulatorControl from './components/SimulatorControl.vue'
+import { MOCK_ORDER_INFO, MOCK_ROUTE_DATA } from './utils/mockData'
 
 const CONFIG_KEY = 'mes_app_config_v2'
 const DEFAULT_CONFIG: AppConfig = {
@@ -72,6 +74,18 @@ async function handleScan() {
   apiRecords.value.unshift(rec)
   activeTab.value = 'api'
   try {
+    // 【仿真逻辑】：如果以 MOCK- 开头，直接使用模拟数据
+    if (code.toUpperCase().startsWith('MOCK-')) {
+      await new Promise(r => setTimeout(r, 800)) // 模拟网络延迟
+      rec.duration = Date.now() - t0
+      rec.resBody = { code: 200, datas: [MOCK_ORDER_INFO] }
+      rec.status = 'success'
+      orderInfo.value = MOCK_ORDER_INFO
+      addLog('success', '[仿真] 模拟工单获取成功')
+      await fetchRouteList(MOCK_ORDER_INFO.route_No)
+      return
+    }
+
     const res = await getOrderByProcess(config, code)
     rec.duration = Date.now() - t0
     rec.resBody = res
@@ -94,6 +108,19 @@ async function fetchRouteList(routeCode: string) {
   const rec: ApiRecord = { title: '获取工步', url: config.routeApiUrl, status: 'pending', time: new Date().toLocaleTimeString(), reqBody: { routeCode } }
   apiRecords.value.unshift(rec)
   try {
+    // 【仿真逻辑】
+    if (routeCode === 'ROUTE_BASE_001') {
+       await new Promise(r => setTimeout(r, 500))
+       rec.duration = Date.now() - t0
+       rec.resBody = MOCK_ROUTE_DATA
+       const steps = MOCK_ROUTE_DATA.data.workSeqList
+       routeSteps.value = steps
+       generateTasks(steps)
+       rec.status = 'success'; addLog('success', '[仿真] 模拟工艺路线获取成功')
+       activeTab.value = 'material'
+       return
+    }
+
     const res = await getRouteList(config, routeCode)
     rec.duration = Date.now() - t0
     rec.resBody = res
@@ -111,7 +138,10 @@ function generateTasks(steps: RouteStep[]) {
   const newTasks: TighteningTask[] = []
   const subSteps: WorkStep[] = steps.flatMap(s => s.workStepList || [])
   subSteps.forEach(step => {
-    const count = (step.workStepLineList as any[])?.[0]?.torqueSettingCount || step.torqueSettingCount || 0
+    const lineInfo = (step.workStepLineList as any[])?.[0]
+    const count = lineInfo?.torqueSettingCount || step.torqueSettingCount || 0
+    const pSetNo = String(lineInfo?.pSetNo || step.pSetNo || '--')
+    
     if (count > 0) {
       for (let i = 1; i <= count; i++) {
         (step.workStepParamList || []).forEach(p => {
@@ -119,6 +149,7 @@ function generateTasks(steps: RouteStep[]) {
             id: `${step.workstepNo}-${i}-${p.paramName}`,
             workstepNo: step.workstepNo || '',
             workstepName: step.workstepName || '',
+            pSetNo: pSetNo,
             screwIndex: i,
             itemDisplayName: `螺丝${i} - ${p.paramName}`,
             paramName: p.paramName || '',
@@ -146,6 +177,30 @@ function setNG() {
   resultMessage.value = '测试综合判定不通过'
   writeSignal('NG', orderInfo.value?.orderCode || '', productCode.value || '', orderInfo.value?.route_No || '')
   addLog('error', '人工判定 NG，信号已输出')
+}
+
+// 处理仿真产生的定扭结果
+function handleMockTorque(data: { torque: string, angle: string, status: string }) {
+  // 查找任务矩阵中第一个待完成项
+  const updatedTasks = JSON.parse(JSON.stringify(tighteningTasks.value)) as TighteningTask[]
+  const nextTorqueIdx = updatedTasks.findIndex(t => t.paramName.includes('扭矩') && !t.actualValue)
+  
+  if (nextTorqueIdx !== -1) {
+    const task = updatedTasks[nextTorqueIdx]
+    task.actualValue = data.torque
+    task.result = data.status === 'OK' ? 'PASS' : 'FAIL'
+    
+    // 配对角度
+    const nextAngleIdx = updatedTasks.findIndex((t, idx) => idx > nextTorqueIdx && t.paramName.includes('角度') && !t.actualValue)
+    if (nextAngleIdx !== -1) {
+      const aTask = updatedTasks[nextAngleIdx]
+      aTask.actualValue = data.angle
+      aTask.result = data.status === 'OK' ? 'PASS' : 'FAIL'
+    }
+    
+    tighteningTasks.value = updatedTasks
+    addLog('success', `[仿真结果] ${data.torque}Nm / ${data.angle}Deg [${data.status}] 已填入矩阵`)
+  }
 }
 
 function resetResult() {
@@ -296,6 +351,14 @@ function resetResult() {
             🔄 复位 / 下一件
           </button>
         </div>
+
+        <!-- 仿真工具区 -->
+        <SimulatorControl 
+          v-model:productCode="productCode"
+          :tasks="tighteningTasks"
+          @log="addLog"
+          @mockTorque="handleMockTorque"
+        />
       </section>
 
       <!-- 右边：标签页数据区 -->
@@ -372,6 +435,7 @@ function resetResult() {
                     <tr>
                       <th style="width: 50px">序号</th>
                       <th>工步名称</th>
+                      <th>程序号</th>
                       <th>项目名称</th>
                       <th>最小</th>
                       <th>最大</th>
@@ -384,6 +448,7 @@ function resetResult() {
                     <tr v-for="(task, idx) in tighteningTasks" :key="task.id" :class="task.result">
                       <td>{{ idx + 1 }}</td>
                       <td>{{ task.workstepName }}</td>
+                      <td><span class="badge pset">{{ task.pSetNo }}</span></td>
                       <td>{{ task.itemDisplayName }}</td>
                       <td>{{ task.min }}</td>
                       <td>{{ task.max }}</td>

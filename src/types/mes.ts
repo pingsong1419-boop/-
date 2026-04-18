@@ -136,6 +136,7 @@ export interface TighteningTask {
   id: string              // 唯一标识，格式如：STEP-SCREW-PARAM
   workstepNo: string      // 所属工步编号
   workstepName: string    // 所属工步名称，如 "M6定扭"
+  pSetNo: string          // 程序号/PSet编号
   screwIndex: number      // 螺丝序号，1-N
   itemDisplayName: string // 显示名称，如 "螺丝1定扭扭矩"
   paramName: string       // 参数内部名，如 "定扭扭矩"

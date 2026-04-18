@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from 'vue'
+import { ref, watch, computed, nextTick, onMounted } from 'vue'
 import type { RouteStep, WorkStep } from '../types/mes'
 
 const props = defineProps<{
@@ -77,6 +77,14 @@ watch(
 const isAllCompleted = computed(() => {
   if (taskList.value.length === 0) return false
   return taskList.value.every(t => t.status === 'completed')
+})
+
+// 添加仿真支持：监听全局条码事件
+onMounted(() => {
+  window.addEventListener('mock:barcode', ((e: CustomEvent) => {
+    scanInput.value = e.detail
+    handleScan()
+  }) as EventListener)
 })
 
 function handleScan() {
