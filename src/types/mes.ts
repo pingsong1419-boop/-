@@ -8,6 +8,10 @@ export interface AppConfig {
   routeApiUrl: string
   /** 工序代码 */
   technicsProcessCode: string
+  /** 定扭枪 IP */
+  desoutterIp: string
+  /** 定扭枪端口 */
+  desoutterPort: number
 }
 
 /** 获取工单请求参数 */
@@ -126,4 +130,19 @@ export interface LabviewSignal {
   productCode: string
   timestamp: string
   routeNo: string
+}
+/** 单项定扭任务记录（细化到每一颗螺丝的每一个参数） */
+export interface TighteningTask {
+  id: string              // 唯一标识，格式如：STEP-SCREW-PARAM
+  workstepNo: string      // 所属工步编号
+  workstepName: string    // 所属工步名称，如 "M6定扭"
+  screwIndex: number      // 螺丝序号，1-N
+  itemDisplayName: string // 显示名称，如 "螺丝1定扭扭矩"
+  paramName: string       // 参数内部名，如 "定扭扭矩"
+  min: number             // 判定下限
+  max: number             // 判定上限
+  unit: string            // 单位
+  actualValue: string | null // 实测值
+  result: 'PENDING' | 'PASS' | 'FAIL' // 判定结果
+  timestamp?: string      // 采集时间
 }

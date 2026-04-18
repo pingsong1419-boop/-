@@ -1,6 +1,6 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, reactive, onMounted, nextTick } from 'vue'
-import type { AppConfig, OrderInfo, RouteStep, TestResult, WorkStep } from './types/mes'
+import type { AppConfig, OrderInfo, RouteStep, TestResult, WorkStep, TighteningTask } from './types/mes'
 import { getOrderByProcess, getRouteList } from './services/mesApi'
 import { writeSignal, clearSignal } from './utils/labviewSignal'
 import ConfigModal from './components/ConfigModal.vue'
@@ -8,16 +8,15 @@ import RouteTable from './components/RouteTable.vue'
 import ApiDetail from './components/ApiDetail.vue'
 import type { ApiRecord } from './components/ApiDetail.vue'
 import MaterialScanner from './components/MaterialScanner.vue'
+import TorqueInteraction from './components/TorqueInteraction.vue'
 
-// ==================== 配置 ====================
 const CONFIG_KEY = 'mes_app_config_v2'
-
 const DEFAULT_CONFIG: AppConfig = {
-  orderApiUrl:
-    'http://172.25.57.144:8076/api/0rderInfo/GetOtherOrderInfoByProcess',
-  routeApiUrl:
-    'http://172.25.57.144:8076/api/0rderInfo/GetTechRouteListByCode',
-  technicsProcessCode: 'CTP_P1240'
+  orderApiUrl: '/mes-api/api/OrderInfo/GetOtherOrderInfoByProcess',
+  routeApiUrl: '/mes-api/api/OrderInfo/GetTechRouteListByCode',
+  technicsProcessCode: 'CTP_P1240',
+  desoutterIp: '192.168.5.212',
+  desoutterPort: 4545
 }
 
 function loadConfig(): AppConfig {
@@ -28,236 +27,121 @@ function loadConfig(): AppConfig {
   return { ...DEFAULT_CONFIG }
 }
 
-function saveConfig(cfg: AppConfig) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg))
-}
-
 const config = reactive<AppConfig>(loadConfig())
 const showConfig = ref(false)
+const onConfigSaved = () => localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
 
-function onConfigSaved() {
-  saveConfig(config)
-}
-
-// ==================== 扫码输入 ====================
 const productCode = ref('')
 const scanInputRef = ref<HTMLInputElement | null>(null)
-// Removed unused scanBuffer and lastScanTime
+const focusScan = () => nextTick(() => scanInputRef.value?.focus())
+onMounted(focusScan)
 
-/** 聚焦扫码框 */
-function focusScan() {
-  nextTick(() => scanInputRef.value?.focus())
-}
-
-onMounted(() => {
-  focusScan()
-})
-
-// ==================== 状态数据 ====================
-/** 步骤 1 */
 const orderInfo = ref<OrderInfo | null>(null)
 const orderLoading = ref(false)
 const orderError = ref('')
-
-/** 步骤 2 */
 const routeSteps = ref<RouteStep[]>([])
 const routeLoading = ref(false)
 const routeError = ref('')
+const tighteningTasks = ref<TighteningTask[]>([])
 
-/** 测试结果 */
 const testResult = ref<TestResult>('IDLE')
 const resultMessage = ref('')
+const logs = ref<any[]>([])
+const apiRecords = ref<ApiRecord[]>([])
+const activeTab = ref<'route' | 'api' | 'log' | 'material' | 'torque'>('route')
 
-// ==================== 日志 ====================
-interface LogEntry {
-  time: string
-  level: 'info' | 'success' | 'error' | 'warn'
-  msg: string
-}
-const logs = ref<LogEntry[]>([])
-
-function addLog(level: LogEntry['level'], msg: string) {
-  logs.value.unshift({
-    time: new Date().toLocaleTimeString('zh-CN'),
-    level,
-    msg
-  })
+function addLog(level: any, msg: string) {
+  logs.value.unshift({ time: new Date().toLocaleTimeString(), level, msg })
   if (logs.value.length > 50) logs.value.pop()
 }
 
-// ==================== 接口交互记录 ====================
-const apiRecords = ref<ApiRecord[]>([])
-
-// ==================== 标签页 ====================
-const activeTab = ref<'route' | 'api' | 'log' | 'material'>('route')
-
-// ==================== 核心流程 ====================
-/** 重置所有状态 */
 function resetAll() {
-  orderInfo.value = null
-  orderError.value = ''
-  routeSteps.value = []
-  routeError.value = ''
-  testResult.value = 'IDLE'
-  resultMessage.value = ''
-  apiRecords.value = []
-  clearSignal()
+  orderInfo.value = null; orderError.value = ''; routeSteps.value = [];
+  routeError.value = ''; testResult.value = 'IDLE'; resultMessage.value = '';
+  apiRecords.value = []; clearSignal();
 }
 
-/** 扫码触发查询 */
 async function handleScan() {
   const code = productCode.value.trim()
-  if (!code) return
-  if (!config.technicsProcessCode) {
-    addLog('error', '请先在配置中设置工序代码')
-    orderError.value = '工序代码未设置，请点击右上角⚙️配置'
-    return
-  }
-
+  if (!code || !config.technicsProcessCode) return
   resetAll()
-  addLog('info', `扫码：${code}，开始查询工单...`)
-
-  // ===== 步骤一：获取工单 =====
+  addLog('info', `开始查询工单: ${code}`)
   orderLoading.value = true
   const t0 = Date.now()
-  // 创建接口记录
-  const rec1: ApiRecord = {
-    title: '接口一：获取工单',
-    url: config.orderApiUrl,
-    reqBody: { technicsProcessCode: config.technicsProcessCode, productCode: code },
-    resBody: undefined,
-    status: 'pending',
-    time: new Date().toLocaleTimeString('zh-CN')
-  }
-  apiRecords.value.unshift(rec1)
-  activeTab.value = 'api'  // 请求时自动切换到交互详情
+  const rec: ApiRecord = { title: '获取工单', url: config.orderApiUrl, status: 'pending', time: new Date().toLocaleTimeString(), reqBody: { code } }
+  apiRecords.value.unshift(rec)
+  activeTab.value = 'api'
   try {
     const res = await getOrderByProcess(config, code)
-    rec1.duration = Date.now() - t0
-    rec1.resBody = res
-    const isOk = res.code === 200 || res.code === '200' || res.success === true
-    // 实际响应：{ code, message, datas: OrderInfo[] }
-    const dataItem = res.datas?.[0] ?? (Array.isArray(res.data) ? res.data[0] : res.data) ?? null
-    if (isOk && dataItem) {
-      rec1.status = 'success'
-      orderInfo.value = dataItem
-      addLog('success', `工单获取成功 → orderCode: ${dataItem.orderCode}，route_No: ${dataItem.route_No}`)
-      // ===== 步骤二：获取工步列表（用 route_No 作为 routeCode）=====
-      await fetchRouteList(dataItem.route_No)
+    rec.duration = Date.now() - t0
+    rec.resBody = res
+    if (res.datas?.[0]) {
+      rec.status = 'success'
+      orderInfo.value = res.datas[0]
+      addLog('success', '工单获取成功')
+      await fetchRouteList(res.datas[0].route_No)
     } else {
-      rec1.status = 'error'
-      const msg = res.message ?? res.msg ?? '未获取到工单数据'
-      orderError.value = msg
-      addLog('error', `工单查询失败：${msg}`)
+      rec.status = 'error'; addLog('error', '未找到工单')
     }
-  } catch (err: unknown) {
-    rec1.status = 'error'
-    rec1.duration = Date.now() - t0
-    const msg = err instanceof Error ? err.message : String(err)
-    rec1.resBody = { error: msg }
-    orderError.value = `请求失败：${msg}`
-    addLog('error', `接口请求异常：${msg}`)
-  } finally {
-    orderLoading.value = false
-  }
+  } catch (err: any) {
+    rec.status = 'error'; addLog('error', err.message)
+  } finally { orderLoading.value = false }
 }
 
-/** 步骤二：获取工步列表 */
 async function fetchRouteList(routeCode: string) {
   routeLoading.value = true
-  routeError.value = ''
-  addLog('info', `查询工步列表，routeCode: ${routeCode}，workSeqNo: ${config.technicsProcessCode}`)
-
   const t0 = Date.now()
-  const rec2: ApiRecord = {
-    title: '接口二：获取工步列表',
-    url: config.routeApiUrl,
-    reqBody: { routeCode, workSeqNo: config.technicsProcessCode },
-    resBody: undefined,
-    status: 'pending',
-    time: new Date().toLocaleTimeString('zh-CN')
-  }
-  apiRecords.value.unshift(rec2)
-
+  const rec: ApiRecord = { title: '获取工步', url: config.routeApiUrl, status: 'pending', time: new Date().toLocaleTimeString(), reqBody: { routeCode } }
+  apiRecords.value.unshift(rec)
   try {
     const res = await getRouteList(config, routeCode)
-    rec2.duration = Date.now() - t0
-    rec2.resBody = res
-    const isOk = res.code === 200 || res.code === '200' || res.success === true
-    if (isOk) {
-      rec2.status = 'success'
-      // 实际响应：{ code, message, data: { workSeqList: RouteStep[] } }
-      const rawData = res.data as Record<string, unknown> | null
-      let steps: RouteStep[] = []
-      if (rawData && Array.isArray(rawData)) {
-        steps = rawData as RouteStep[]
-      } else if (rawData && Array.isArray(rawData['workSeqList'])) {
-        steps = rawData['workSeqList'] as RouteStep[]
-      } else if (rawData) {
-        steps = [rawData as unknown as RouteStep]
+    rec.resBody = res
+    const steps = res.data?.workSeqList || (Array.isArray(res.data) ? res.data : [])
+    routeSteps.value = steps
+    generateTasks(steps)
+    rec.status = 'success'; addLog('success', `获取到 ${steps.length} 条工步`)
+    activeTab.value = 'material'
+  } catch (err: any) {
+    rec.status = 'error'; addLog('error', err.message)
+  } finally { routeLoading.value = false }
+}
+
+function generateTasks(steps: RouteStep[]) {
+  const newTasks: TighteningTask[] = []
+  const subSteps: WorkStep[] = steps.flatMap(s => s.workStepList || [])
+  subSteps.forEach(step => {
+    const count = (step.workStepLineList as any[])?.[0]?.torqueSettingCount || step.torqueSettingCount || 0
+    if (count > 0) {
+      for (let i = 1; i <= count; i++) {
+        (step.workStepParamList || []).forEach(p => {
+          newTasks.push({
+            id: `${step.workstepNo}-${i}-${p.paramName}`,
+            workstepNo: step.workstepNo || '',
+            workstepName: step.workstepName || '',
+            screwIndex: i,
+            itemDisplayName: `螺丝${i} - ${p.paramName}`,
+            paramName: p.paramName || '',
+            min: Number(p.minQualityValue) || 0,
+            max: Number(p.maxQualityValue) || 0,
+            unit: p.paramUnit || '',
+            actualValue: null, result: 'PENDING'
+          })
+        })
       }
-      routeSteps.value = steps
-      addLog('success', `工步列表获取成功，共 ${steps.length} 条`)
-      // 如果有物料，自动跳转到物料验证页
-      const hasMaterial = steps.some(s => (s.workStepList as WorkStep[])?.some(ws => (ws.workStepMaterialList as any[])?.length))
-      if (hasMaterial) {
-        activeTab.value = 'material'
-      } else {
-        activeTab.value = 'route'  // 成功后切换到工步列表
-      }
-    } else {
-      rec2.status = 'error'
-      const msg = res.message ?? res.msg ?? '未获取到工步数据'
-      routeError.value = msg
-      addLog('warn', `工步列表查询失败：${msg}`)
     }
-  } catch (err: unknown) {
-    rec2.status = 'error'
-    rec2.duration = Date.now() - t0
-    const msg = err instanceof Error ? err.message : String(err)
-    rec2.resBody = { error: msg }
-    routeError.value = `请求失败：${msg}`
-    addLog('error', `工步接口异常：${msg}`)
-  } finally {
-    routeLoading.value = false
-  }
-}
-
-// ==================== OK / NG 信号 ====================
-function setOK() {
-  testResult.value = 'OK'
-  resultMessage.value = '检测通过'
-  const info = orderInfo.value
-  writeSignal('OK', info?.orderCode ?? '', productCode.value, info?.route_No ?? '')
-  addLog('success', `[LabVIEW信号] 发出 ✅ OK 信号`)
-}
-
-function setNG() {
-  testResult.value = 'NG'
-  resultMessage.value = '检测不合格'
-  const info = orderInfo.value
-  writeSignal('NG', info?.orderCode ?? '', productCode.value, info?.route_No ?? '')
-  addLog('error', `[LabVIEW信号] 发出 ❌ NG 信号`)
-}
-
-function resetResult() {
-  testResult.value = 'IDLE'
-  resultMessage.value = ''
-  clearSignal()
-  productCode.value = ''
-  focusScan()
-  addLog('info', '已复位，等待下一次扫码')
+  })
+  tighteningTasks.value = newTasks
 }
 </script>
 
 <template>
   <div class="app-root">
-    <!-- 顶部标题栏 -->
+    <!-- 椤堕儴鏍囬鏍?-->
     <header class="app-header">
       <div class="header-left">
         <div class="brand-icon">MES</div>
         <div class="brand-text">
-          <span class="brand-title">工序扫码系统</span>
+          <span class="brand-title">宸ュ簭鎵爜绯荤粺</span>
           <span class="brand-sub">MES Process Scanner v1.0</span>
         </div>
       </div>
@@ -268,30 +152,29 @@ function resetResult() {
         </span>
       </div>
       <div class="header-right">
-        <button class="icon-btn" title="系统配置" @click="showConfig = true">
-          ⚙️ 配置
+        <button class="icon-btn" title="绯荤粺閰嶇疆" @click="showConfig = true">
+          鈿欙笍 閰嶇疆
         </button>
       </div>
     </header>
 
-    <!-- 主体内容 -->
+    <!-- 涓讳綋鍐呭 -->
     <main class="app-main">
-      <!-- 左边：操作区 -->
+      <!-- 宸﹁竟锛氭搷浣滃尯 -->
       <section class="left-panel">
 
-        <!-- 扫码输入区 -->
+        <!-- 鎵爜杈撳叆鍖?-->
         <div class="card scan-card">
           <div class="card-title">
             <span class="step-badge">1</span>
-            扫描产品码
-          </div>
+            鎵弿浜у搧鐮?          </div>
           <div class="scan-input-wrap" :class="{ 'scanning': orderLoading }">
-            <span class="scan-icon">📷</span>
+            <span class="scan-icon">馃摲</span>
             <input
               ref="scanInputRef"
               v-model="productCode"
               type="text"
-              placeholder="请扫描或输入产品码..."
+              placeholder="璇锋壂鎻忔垨杈撳叆浜у搧鐮?.."
               class="scan-input"
               :disabled="orderLoading || routeLoading"
               @keydown.enter="handleScan"
@@ -301,38 +184,38 @@ function resetResult() {
               :disabled="orderLoading || !productCode.trim()"
               @click="handleScan"
             >
-              {{ orderLoading ? '查询中...' : '查询' }}
+              {{ orderLoading ? '查询涓?..' : '查询' }}
             </button>
           </div>
-          <p class="scan-hint">扫描完成后按 <kbd>Enter</kbd> 或点击「查询」按钮</p>
+          <p class="scan-hint">扫描后请按 <kbd>Enter</kbd> 提交</p>
         </div>
 
-        <!-- 工单信息区 -->
+        <!-- 宸ュ崟淇℃伅鍖?-->
         <div class="card info-card">
           <div class="card-title">
             <span class="step-badge">2</span>
-            工单信息
+            宸ュ崟淇℃伅
             <div v-if="orderLoading" class="loading-spin" />
           </div>
 
           <div v-if="orderError" class="error-box">
-            <span>⚠️</span> {{ orderError }}
+            <span>鈿狅笍</span> {{ orderError }}
           </div>
 
           <div v-else-if="orderInfo" class="info-grid">
             <div class="info-item">
-              <span class="info-label">工单号</span>
+              <span class="info-label">宸ュ崟鍙?</span>
               <span class="info-value highlight">{{ orderInfo.orderCode }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">工艺路线编码 (route_No)</span>
+              <span class="info-label">宸ヨ壓璺嚎缂栫爜 (route_No)</span>
               <span class="info-value mono">{{ orderInfo.route_No }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">产品码</span>
+              <span class="info-label">浜у搧鐮?</span>
               <span class="info-value mono">{{ productCode }}</span>
             </div>
-            <!-- 显示其他返回字段 -->
+            <!-- 鏄剧ず鍏朵粬杩斿洖瀛楁 -->
             <template v-for="(val, key) in orderInfo" :key="key">
               <div
                 v-if="key !== 'orderCode' && key !== 'route_No'"
@@ -347,12 +230,12 @@ function resetResult() {
           <div v-else class="empty-hint">等待扫码查询...</div>
         </div>
 
-        <!-- OK/NG 区域 -->
+        <!-- OK/NG 鍖哄煙 -->
         <div class="card result-card">
           <div class="card-title">
             <span class="step-badge">3</span>
-            测试结果
-            <span class="lv-badge">↔ LabVIEW信号</span>
+            娴嬭瘯缁撴灉
+            <span class="lv-badge">鈫?LabVIEW淇″彿</span>
           </div>
 
           <div class="result-display" :class="testResult.toLowerCase()">
@@ -371,15 +254,14 @@ function resetResult() {
               :disabled="!orderInfo || testResult !== 'IDLE'"
               @click="setOK"
             >
-              ✅ OK — 合格
+              鉁?OK 鈥?鍚堟牸
             </button>
             <button
               class="btn-ng"
               :disabled="!orderInfo || testResult !== 'IDLE'"
               @click="setNG"
             >
-              ❌ NG — 不合格
-            </button>
+              鉂?NG 鈥?涓嶅悎鏍?            </button>
           </div>
 
           <button
@@ -387,21 +269,20 @@ function resetResult() {
             class="btn-reset"
             @click="resetResult"
           >
-            🔄 复位 / 下一件
-          </button>
+            馃攧 澶嶄綅 / 涓嬩竴浠?          </button>
         </div>
       </section>
 
-      <!-- 右边：标签页数据区 -->
+      <!-- 鍙宠竟锛氭爣绛鹃〉鏁版嵁鍖?-->
       <section class="right-panel">
-        <!-- 标签栏 -->
+        <!-- 鏍囩鏍?-->
         <div class="tab-bar">
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'route' }"
             @click="activeTab = 'route'"
           >
-            <span>📋</span> 工步列表
+            <span>馃搵</span> 宸ユ鍒楄〃
             <span v-if="routeSteps.length" class="tab-count">{{ routeSteps.length }}</span>
           </button>
           <button
@@ -409,14 +290,21 @@ function resetResult() {
             :class="{ active: activeTab === 'material' }"
             @click="activeTab = 'material'"
           >
-            <span>📦</span> 物料验证
+            <span>馃摝</span> 鐗╂枡楠岃瘉
+          </button>
+          <button
+            class="tab-btn"
+            :class="{ active: activeTab === 'torque' }"
+            @click="activeTab = 'torque'"
+          >
+            <span>馃敡</span> 瀹氭壄浜や簰
           </button>
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'api' }"
             @click="activeTab = 'api'"
           >
-            <span>🔌</span> 接口交互
+            <span>馃攲</span> 鎺ュ彛浜や簰
             <span v-if="apiRecords.length" class="tab-count">{{ apiRecords.length }}</span>
           </button>
           <button
@@ -424,36 +312,89 @@ function resetResult() {
             :class="{ active: activeTab === 'log' }"
             @click="activeTab = 'log'"
           >
-            <span>📟</span> 操作日志
+            <span>馃摕</span> 鎿嶄綔鏃ュ織
             <span v-if="logs.length" class="tab-count">{{ logs.length }}</span>
           </button>
         </div>
 
-        <!-- 标签内容区 -->
+        <!-- 鏍囩鍐呭鍖?-->
         <div class="tab-content">
-          <!-- 工步列表 -->
+          <!-- 宸ユ鍒楄〃 -->
           <div v-show="activeTab === 'route'" class="tab-pane">
             <div v-if="routeError" class="error-box">
-              <span>⚠️</span> {{ routeError }}
+              <span>鈿狅笍</span> {{ routeError }}
             </div>
             <RouteTable :steps="routeSteps" :loading="routeLoading" />
           </div>
 
-          <!-- 物料验证 -->
-          <div v-show="activeTab === 'material'" class="tab-pane">
+          <!-- 鐗╂枡楠岃瘉 -->
+          <div v-show="activeTab === 'material'" class="tab-pane flex-column">
             <MaterialScanner 
               :steps="routeSteps" 
               @log="addLog"
               @complete="setOK"
             />
+
+            <!-- 瀹氭壄鍒ゅ畾鐭╅樀琛ㄦ牸 (宸叉寜闇€绉诲姩鑷崇墿鏂欎笅鏂? -->
+            <div class="tightening-matrix-card-modern">
+              <div class="matrix-header-modern">
+                <span class="matrix-title">馃敥 瀹氭壄鍒ゅ畾鐭╅樀 (鍩轰簬宸ュ崟宸ユ鑷姩灞曡В)</span>
+                <button class="btn-text-modern" @click="tighteningTasks.forEach(t => t.actualValue = null)">閲嶇疆杩涘害</button>
+              </div>
+              <div class="matrix-table-wrap">
+                <table class="matrix-table-modern">
+                  <thead>
+                    <tr>
+                      <th style="width: 50px">搴忓彿</th>
+                      <th>宸ユ鍚嶇О</th>
+                      <th>椤圭洰鍚嶇О</th>
+                      <th>鏈€灏 </th>
+                      <th>鏈€ </th>
+                      <th>鍗曚綅</th>
+                      <th>娴嬭瘯鍊?</th>
+                      <th>缁撴灉</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(task, idx) in tighteningTasks" :key="task.id" :class="task.result">
+                      <td>{{ idx + 1 }}</td>
+                      <td>{{ task.workstepName }}</td>
+                      <td>{{ task.itemDisplayName }}</td>
+                      <td>{{ task.min }}</td>
+                      <td>{{ task.max }}</td>
+                      <td>{{ task.unit }}</td>
+                      <td class="mono b">{{ task.actualValue || '--' }}</td>
+                      <td>
+                        <span v-if="task.result === 'PASS'" class="badge pass">OK</span>
+                        <span v-else-if="task.result === 'FAIL'" class="badge fail">NG</span>
+                        <span v-else class="badge pending">绛夊緟</span>
+                      </td>
+                    </tr>
+                    <tr v-if="!tighteningTasks.length">
+                      <td colspan="8" class="empty-text">鏆傛棤瀹氭壄閰嶇疆锛岃鍏堟煡璇㈠伐鍗曞伐姝?</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
-          <!-- 接口交互详情 -->
+          <!-- 瀹氭壄浜や簰 -->
+          <div v-show="activeTab === 'torque'" class="tab-pane">
+            <TorqueInteraction 
+              :ip="config.desoutterIp"
+              :port="config.desoutterPort"
+              v-model:tasks="tighteningTasks"
+              @log="addLog"
+            />
+          </div>
+
+          <!-- 鎺ュ彛浜や簰璇︽儏 -->
           <div v-show="activeTab === 'api'" class="tab-pane">
             <ApiDetail :records="apiRecords" />
           </div>
 
-          <!-- 操作日志 -->
+          <!-- 鎿嶄綔鏃ュ織 -->
           <div v-show="activeTab === 'log'" class="tab-pane log-pane">
             <div class="log-scroll">
               <div
@@ -465,14 +406,14 @@ function resetResult() {
                 <span class="log-time">{{ entry.time }}</span>
                 <span class="log-msg">{{ entry.msg }}</span>
               </div>
-              <div v-if="!logs.length" class="log-empty">暂无日志</div>
+              <div v-if="!logs.length" class="log-empty">鏆傛棤鏃ュ織</div>
             </div>
           </div>
         </div>
       </section>
     </main>
 
-    <!-- 配置弹窗 -->
+    <!-- 閰嶇疆寮圭獥 -->
     <ConfigModal
       v-model="config"
       v-model:visible="showConfig"
@@ -482,7 +423,7 @@ function resetResult() {
 </template>
 
 <style scoped>
-/* 根容器 */
+/* 鏍瑰鍣?*/
 .app-root {
   display: flex;
   flex-direction: column;
@@ -494,7 +435,7 @@ function resetResult() {
   overflow: hidden;
 }
 
-/* 顶部标题栏 */
+/* 椤堕儴鏍囬鏍?*/
 .app-header {
   display: flex;
   align-items: center;
@@ -593,7 +534,7 @@ function resetResult() {
   color: #e3f2fd;
 }
 
-/* 主体 */
+/* 涓讳綋 */
 .app-main {
   display: flex;
   gap: 12px;
@@ -622,7 +563,7 @@ function resetResult() {
   border-radius: 10px;
 }
 
-/* 标签栏 */
+/* 鏍囩鏍?*/
 .tab-bar {
   display: flex;
   gap: 2px;
@@ -675,7 +616,7 @@ function resetResult() {
   background: rgba(66, 165, 245, 0.3);
 }
 
-/* 标签内容区 */
+/* 鏍囩鍐呭鍖?*/
 .tab-content {
   flex: 1;
   overflow: hidden;
@@ -694,7 +635,7 @@ function resetResult() {
   padding: 10px;
 }
 
-/* 通用卡片 */
+/* 閫氱敤鍗＄墖 */
 .card {
   background: #131929;
   border: 1px solid rgba(100, 181, 246, 0.12);
@@ -754,7 +695,7 @@ function resetResult() {
   font-weight: 500;
 }
 
-/* 扫码输入 */
+/* 鎵爜杈撳叆 */
 .scan-input-wrap {
   display: flex;
   align-items: center;
@@ -836,7 +777,7 @@ kbd {
   color: #64b5f6;
 }
 
-/* 工单信息 */
+/* 宸ュ崟淇℃伅 */
 .info-grid {
   display: flex;
   flex-direction: column;
@@ -884,7 +825,7 @@ kbd {
   padding: 16px 0;
 }
 
-/* OK/NG 结果 */
+/* OK/NG 缁撴灉 */
 .result-display {
   display: flex;
   align-items: center;
@@ -1000,7 +941,7 @@ kbd {
   border-color: #42a5f5;
 }
 
-/* 错误框 */
+/* 閿欒妗?*/
 .error-box {
   background: rgba(244, 67, 54, 0.08);
   border: 1px solid rgba(244, 67, 54, 0.25);
@@ -1014,7 +955,7 @@ kbd {
   margin-bottom: 8px;
 }
 
-/* 加载动画 */
+/* 鍔犺浇鍔ㄧ敾 */
 .loading-spin {
   width: 14px;
   height: 14px;
@@ -1025,7 +966,7 @@ kbd {
   margin-left: auto;
 }
 
-/* 日志 */
+/* 鏃ュ織 */
 .log-scroll {
   flex: 1;
   overflow-y: auto;
@@ -1076,7 +1017,148 @@ kbd {
   padding: 16px;
 }
 
+/* 瀹氭壄鍒ゅ畾鐭╅樀 (瀵归綈鐗╂枡楠岃瘉 UI) */
+.tightening-matrix-card-modern {
+  margin-top: 24px;
+  border-top: 1px solid rgba(100, 181, 246, 0.1);
+}
+
+.matrix-header-modern {
+  padding: 12px 14px;
+  background: rgba(13, 71, 161, 0.15);
+  border-bottom: 1px solid rgba(100, 181, 246, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.matrix-title {
+  color: #e3f2fd;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.matrix-table-modern {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.matrix-table-modern th {
+  background: rgba(21, 101, 192, 0.2);
+  color: #78909c;
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(100, 181, 246, 0.1);
+}
+
+.matrix-table-modern td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(100, 181, 246, 0.05);
+  color: #cfd8dc;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.badge.pass { background: rgba(0, 230, 118, 0.15); color: #00e676; }
+.badge.fail { background: rgba(244, 67, 54, 0.15); color: #f44336; }
+.badge.pending { background: rgba(255, 171, 64, 0.15); color: #ffab40; }
+
+.matrix-mono { font-family: 'Consolas', monospace; color: #64b5f6; }
+
+.btn-reset-light {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* 定扭判定矩阵 (对齐物料验证 UI) */
+.tightening-matrix-card-modern {
+  margin-top: 24px;
+  border-top: 1px solid rgba(100, 181, 246, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+.matrix-header-modern {
+  padding: 12px 14px;
+  background: rgba(13, 71, 161, 0.15);
+  border-bottom: 1px solid rgba(100, 181, 246, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.matrix-title {
+  color: #e3f2fd;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.matrix-table-wrap {
+  flex: 1;
+  max-height: 350px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 181, 246, 0.2) transparent;
+}
+
+.matrix-table-modern {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.matrix-table-modern th {
+  background: #0d1117;
+  color: #78909c;
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(100, 181, 246, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.matrix-table-modern td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(100, 181, 246, 0.05);
+  color: #cfd8dc;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.badge.pass { background: rgba(0, 230, 118, 0.15); color: #00e676; }
+.badge.fail { background: rgba(244, 67, 54, 0.15); color: #f44336; }
+.badge.pending { background: rgba(255, 171, 64, 0.15); color: #ffab40; }
+
+.matrix-mono { font-family: 'Consolas', monospace; color: #64b5f6; }
 </style>

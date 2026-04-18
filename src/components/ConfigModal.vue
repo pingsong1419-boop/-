@@ -72,6 +72,27 @@ function handleCancel() {
             />
             <small>当前工位对应的工序代码</small>
           </div>
+
+          <div class="field-groups-row" style="display: flex; gap: 16px;">
+            <div class="field-group" style="flex: 2;">
+              <label>定扭控制器 IP (Desoutter Open Protocol)</label>
+              <input
+                v-model="form.desoutterIp"
+                type="text"
+                placeholder="192.168.5.212"
+                class="input-field"
+              />
+            </div>
+            <div class="field-group" style="flex: 1;">
+              <label>端口</label>
+              <input
+                v-model.number="form.desoutterPort"
+                type="number"
+                placeholder="4545"
+                class="input-field"
+              />
+            </div>
+          </div>
         </div>
 
         <div class="modal-footer">
