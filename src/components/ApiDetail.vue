@@ -5,7 +5,7 @@ export interface ApiRecord {
   title: string
   url: string
   reqBody: object
-  resBody: unknown
+  resBody?: unknown
   status: 'pending' | 'success' | 'error'
   duration?: number
   time: string

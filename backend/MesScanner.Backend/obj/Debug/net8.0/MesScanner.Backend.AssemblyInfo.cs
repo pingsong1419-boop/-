@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MesScanner.Backend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b509ca3eaf3573f96ef7fafa393c449800812c8e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b969ba212b3160388636c452443ee47e0525206f")]
 [assembly: System.Reflection.AssemblyProductAttribute("MesScanner.Backend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MesScanner.Backend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, reactive, onMounted, nextTick } from 'vue'
 import type { AppConfig, OrderInfo, RouteStep, TestResult, WorkStep, TighteningTask } from './types/mes'
 import { getOrderByProcess, getRouteList } from './services/mesApi'
@@ -95,8 +95,9 @@ async function fetchRouteList(routeCode: string) {
   apiRecords.value.unshift(rec)
   try {
     const res = await getRouteList(config, routeCode)
+    rec.duration = Date.now() - t0
     rec.resBody = res
-    const steps = res.data?.workSeqList || (Array.isArray(res.data) ? res.data : [])
+    const steps = (res.data as any)?.workSeqList || (Array.isArray(res.data) ? res.data : [])
     routeSteps.value = steps
     generateTasks(steps)
     rec.status = 'success'; addLog('success', `获取到 ${steps.length} 条工步`)
@@ -132,16 +133,37 @@ function generateTasks(steps: RouteStep[]) {
   })
   tighteningTasks.value = newTasks
 }
+
+function setOK() {
+  testResult.value = 'OK'
+  resultMessage.value = '测试综合判定通过'
+  writeSignal('OK', orderInfo.value?.orderCode || '', productCode.value || '', orderInfo.value?.route_No || '')
+  addLog('success', '人工判定 OK，信号已输出')
+}
+
+function setNG() {
+  testResult.value = 'NG'
+  resultMessage.value = '测试综合判定不通过'
+  writeSignal('NG', orderInfo.value?.orderCode || '', productCode.value || '', orderInfo.value?.route_No || '')
+  addLog('error', '人工判定 NG，信号已输出')
+}
+
+function resetResult() {
+  testResult.value = 'IDLE'
+  resultMessage.value = ''
+  clearSignal()
+  addLog('info', '状态已复位，等待下一件')
+}
 </script>
 
 <template>
   <div class="app-root">
-    <!-- 椤堕儴鏍囬鏍?-->
+    <!-- 顶部标题栏 -->
     <header class="app-header">
       <div class="header-left">
         <div class="brand-icon">MES</div>
         <div class="brand-text">
-          <span class="brand-title">宸ュ簭鎵爜绯荤粺</span>
+          <span class="brand-title">工序扫码系统</span>
           <span class="brand-sub">MES Process Scanner v1.0</span>
         </div>
       </div>
@@ -152,29 +174,30 @@ function generateTasks(steps: RouteStep[]) {
         </span>
       </div>
       <div class="header-right">
-        <button class="icon-btn" title="绯荤粺閰嶇疆" @click="showConfig = true">
-          鈿欙笍 閰嶇疆
+        <button class="icon-btn" title="系统配置" @click="showConfig = true">
+          ⚙️ 配置
         </button>
       </div>
     </header>
 
-    <!-- 涓讳綋鍐呭 -->
+    <!-- 主体内容 -->
     <main class="app-main">
-      <!-- 宸﹁竟锛氭搷浣滃尯 -->
+      <!-- 左边：操作区 -->
       <section class="left-panel">
 
-        <!-- 鎵爜杈撳叆鍖?-->
+        <!-- 扫码输入区 -->
         <div class="card scan-card">
           <div class="card-title">
             <span class="step-badge">1</span>
-            鎵弿浜у搧鐮?          </div>
+            扫描产品条码
+          </div>
           <div class="scan-input-wrap" :class="{ 'scanning': orderLoading }">
-            <span class="scan-icon">馃摲</span>
+            <span class="scan-icon">📷</span>
             <input
               ref="scanInputRef"
               v-model="productCode"
               type="text"
-              placeholder="璇锋壂鎻忔垨杈撳叆浜у搧鐮?.."
+              placeholder="请扫描或输入产品条码..."
               class="scan-input"
               :disabled="orderLoading || routeLoading"
               @keydown.enter="handleScan"
@@ -184,38 +207,38 @@ function generateTasks(steps: RouteStep[]) {
               :disabled="orderLoading || !productCode.trim()"
               @click="handleScan"
             >
-              {{ orderLoading ? '查询涓?..' : '查询' }}
+              {{ orderLoading ? '查询中...' : '查询' }}
             </button>
           </div>
           <p class="scan-hint">扫描后请按 <kbd>Enter</kbd> 提交</p>
         </div>
 
-        <!-- 宸ュ崟淇℃伅鍖?-->
+        <!-- 工单信息区 -->
         <div class="card info-card">
           <div class="card-title">
             <span class="step-badge">2</span>
-            宸ュ崟淇℃伅
+            工单信息
             <div v-if="orderLoading" class="loading-spin" />
           </div>
 
           <div v-if="orderError" class="error-box">
-            <span>鈿狅笍</span> {{ orderError }}
+            <span>⚠️</span> {{ orderError }}
           </div>
 
           <div v-else-if="orderInfo" class="info-grid">
             <div class="info-item">
-              <span class="info-label">宸ュ崟鍙?</span>
+              <span class="info-label">工单号</span>
               <span class="info-value highlight">{{ orderInfo.orderCode }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">宸ヨ壓璺嚎缂栫爜 (route_No)</span>
+              <span class="info-label">工艺路线编码 (route_No)</span>
               <span class="info-value mono">{{ orderInfo.route_No }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">浜у搧鐮?</span>
+              <span class="info-label">产品条码</span>
               <span class="info-value mono">{{ productCode }}</span>
             </div>
-            <!-- 鏄剧ず鍏朵粬杩斿洖瀛楁 -->
+            <!-- 显示其他返回字段 -->
             <template v-for="(val, key) in orderInfo" :key="key">
               <div
                 v-if="key !== 'orderCode' && key !== 'route_No'"
@@ -230,12 +253,12 @@ function generateTasks(steps: RouteStep[]) {
           <div v-else class="empty-hint">等待扫码查询...</div>
         </div>
 
-        <!-- OK/NG 鍖哄煙 -->
+        <!-- OK/NG 区域 -->
         <div class="card result-card">
           <div class="card-title">
             <span class="step-badge">3</span>
-            娴嬭瘯缁撴灉
-            <span class="lv-badge">鈫?LabVIEW淇″彿</span>
+            测试结果
+            <span class="lv-badge">→ LabVIEW信号</span>
           </div>
 
           <div class="result-display" :class="testResult.toLowerCase()">
@@ -254,14 +277,15 @@ function generateTasks(steps: RouteStep[]) {
               :disabled="!orderInfo || testResult !== 'IDLE'"
               @click="setOK"
             >
-              鉁?OK 鈥?鍚堟牸
+              ✅ OK — 合格
             </button>
             <button
               class="btn-ng"
               :disabled="!orderInfo || testResult !== 'IDLE'"
               @click="setNG"
             >
-              鉂?NG 鈥?涓嶅悎鏍?            </button>
+              ❌ NG — 不合格
+            </button>
           </div>
 
           <button
@@ -269,20 +293,21 @@ function generateTasks(steps: RouteStep[]) {
             class="btn-reset"
             @click="resetResult"
           >
-            馃攧 澶嶄綅 / 涓嬩竴浠?          </button>
+            🔄 复位 / 下一件
+          </button>
         </div>
       </section>
 
-      <!-- 鍙宠竟锛氭爣绛鹃〉鏁版嵁鍖?-->
+      <!-- 右边：标签页数据区 -->
       <section class="right-panel">
-        <!-- 鏍囩鏍?-->
+        <!-- 标签栏 -->
         <div class="tab-bar">
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'route' }"
             @click="activeTab = 'route'"
           >
-            <span>馃搵</span> 宸ユ鍒楄〃
+            <span>📋</span> 工步列表
             <span v-if="routeSteps.length" class="tab-count">{{ routeSteps.length }}</span>
           </button>
           <button
@@ -290,21 +315,21 @@ function generateTasks(steps: RouteStep[]) {
             :class="{ active: activeTab === 'material' }"
             @click="activeTab = 'material'"
           >
-            <span>馃摝</span> 鐗╂枡楠岃瘉
+            <span>📦</span> 物料验证
           </button>
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'torque' }"
             @click="activeTab = 'torque'"
           >
-            <span>馃敡</span> 瀹氭壄浜や簰
+            <span>🔧</span> 定扭交互
           </button>
           <button
             class="tab-btn"
             :class="{ active: activeTab === 'api' }"
             @click="activeTab = 'api'"
           >
-            <span>馃攲</span> 鎺ュ彛浜や簰
+            <span>🔌</span> 接口交互
             <span v-if="apiRecords.length" class="tab-count">{{ apiRecords.length }}</span>
           </button>
           <button
@@ -312,22 +337,22 @@ function generateTasks(steps: RouteStep[]) {
             :class="{ active: activeTab === 'log' }"
             @click="activeTab = 'log'"
           >
-            <span>馃摕</span> 鎿嶄綔鏃ュ織
+            <span>📄</span> 操作日志
             <span v-if="logs.length" class="tab-count">{{ logs.length }}</span>
           </button>
         </div>
 
-        <!-- 鏍囩鍐呭鍖?-->
+        <!-- 标签内容区 -->
         <div class="tab-content">
-          <!-- 宸ユ鍒楄〃 -->
+          <!-- 工步列表 -->
           <div v-show="activeTab === 'route'" class="tab-pane">
             <div v-if="routeError" class="error-box">
-              <span>鈿狅笍</span> {{ routeError }}
+              <span>⚠️</span> {{ routeError }}
             </div>
             <RouteTable :steps="routeSteps" :loading="routeLoading" />
           </div>
 
-          <!-- 鐗╂枡楠岃瘉 -->
+          <!-- 物料验证 -->
           <div v-show="activeTab === 'material'" class="tab-pane flex-column">
             <MaterialScanner 
               :steps="routeSteps" 
@@ -335,24 +360,24 @@ function generateTasks(steps: RouteStep[]) {
               @complete="setOK"
             />
 
-            <!-- 瀹氭壄鍒ゅ畾鐭╅樀琛ㄦ牸 (宸叉寜闇€绉诲姩鑷崇墿鏂欎笅鏂? -->
+            <!-- 定扭判定矩阵表格 (已按需移动至物料下方) -->
             <div class="tightening-matrix-card-modern">
               <div class="matrix-header-modern">
-                <span class="matrix-title">馃敥 瀹氭壄鍒ゅ畾鐭╅樀 (鍩轰簬宸ュ崟宸ユ鑷姩灞曡В)</span>
-                <button class="btn-text-modern" @click="tighteningTasks.forEach(t => t.actualValue = null)">閲嶇疆杩涘害</button>
+                <span class="matrix-title">🔥 定扭判定矩阵 (基于工单工步自动展解)</span>
+                <button class="btn-text-modern" @click="tighteningTasks.forEach(t => t.actualValue = null)">重置进度</button>
               </div>
               <div class="matrix-table-wrap">
                 <table class="matrix-table-modern">
                   <thead>
                     <tr>
-                      <th style="width: 50px">搴忓彿</th>
-                      <th>宸ユ鍚嶇О</th>
-                      <th>椤圭洰鍚嶇О</th>
-                      <th>鏈€灏 </th>
-                      <th>鏈€ </th>
-                      <th>鍗曚綅</th>
-                      <th>娴嬭瘯鍊?</th>
-                      <th>缁撴灉</th>
+                      <th style="width: 50px">序号</th>
+                      <th>工步名称</th>
+                      <th>项目名称</th>
+                      <th>最小</th>
+                      <th>最大</th>
+                      <th>单位</th>
+                      <th>测试值</th>
+                      <th>结果</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -367,11 +392,11 @@ function generateTasks(steps: RouteStep[]) {
                       <td>
                         <span v-if="task.result === 'PASS'" class="badge pass">OK</span>
                         <span v-else-if="task.result === 'FAIL'" class="badge fail">NG</span>
-                        <span v-else class="badge pending">绛夊緟</span>
+                        <span v-else class="badge pending">等待</span>
                       </td>
                     </tr>
                     <tr v-if="!tighteningTasks.length">
-                      <td colspan="8" class="empty-text">鏆傛棤瀹氭壄閰嶇疆锛岃鍏堟煡璇㈠伐鍗曞伐姝?</td>
+                      <td colspan="8" class="empty-text">暂无定扭配置，请先查询工单工步</td>
                     </tr>
                   </tbody>
                 </table>
@@ -379,7 +404,7 @@ function generateTasks(steps: RouteStep[]) {
             </div>
           </div>
 
-          <!-- 瀹氭壄浜や簰 -->
+          <!-- 定扭交互 -->
           <div v-show="activeTab === 'torque'" class="tab-pane">
             <TorqueInteraction 
               :ip="config.desoutterIp"
@@ -389,12 +414,12 @@ function generateTasks(steps: RouteStep[]) {
             />
           </div>
 
-          <!-- 鎺ュ彛浜や簰璇︽儏 -->
+          <!-- 接口交互详情 -->
           <div v-show="activeTab === 'api'" class="tab-pane">
             <ApiDetail :records="apiRecords" />
           </div>
 
-          <!-- 鎿嶄綔鏃ュ織 -->
+          <!-- 操作日志 -->
           <div v-show="activeTab === 'log'" class="tab-pane log-pane">
             <div class="log-scroll">
               <div
@@ -406,14 +431,14 @@ function generateTasks(steps: RouteStep[]) {
                 <span class="log-time">{{ entry.time }}</span>
                 <span class="log-msg">{{ entry.msg }}</span>
               </div>
-              <div v-if="!logs.length" class="log-empty">鏆傛棤鏃ュ織</div>
+              <div v-if="!logs.length" class="log-empty">暂无日志</div>
             </div>
           </div>
         </div>
       </section>
     </main>
 
-    <!-- 閰嶇疆寮圭獥 -->
+    <!-- 配置弹窗 -->
     <ConfigModal
       v-model="config"
       v-model:visible="showConfig"
@@ -534,7 +559,7 @@ function generateTasks(steps: RouteStep[]) {
   color: #e3f2fd;
 }
 
-/* 涓讳綋 */
+/* 主体 */
 .app-main {
   display: flex;
   gap: 12px;
@@ -695,7 +720,7 @@ function generateTasks(steps: RouteStep[]) {
   font-weight: 500;
 }
 
-/* 鎵爜杈撳叆 */
+/* 扫码输入 */
 .scan-input-wrap {
   display: flex;
   align-items: center;
@@ -825,7 +850,7 @@ kbd {
   padding: 16px 0;
 }
 
-/* OK/NG 缁撴灉 */
+/* OK/NG 结果 */
 .result-display {
   display: flex;
   align-items: center;
@@ -1017,7 +1042,7 @@ kbd {
   padding: 16px;
 }
 
-/* 瀹氭壄鍒ゅ畾鐭╅樀 (瀵归綈鐗╂枡楠岃瘉 UI) */
+/* 定扭判定矩阵 (瀵归綈物料验证 UI) */
 .tightening-matrix-card-modern {
   margin-top: 24px;
   border-top: 1px solid rgba(100, 181, 246, 0.1);

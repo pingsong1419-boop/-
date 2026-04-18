@@ -31,3 +31,4 @@ C:\Users\95403\.gemini\antigravity\scratch\mes-scanner\backend\MesScanner.Backen
 C:\Users\95403\.gemini\antigravity\scratch\mes-scanner\backend\MesScanner.Backend\obj\Debug\net8.0\MesScanner.Backend.pdb
 C:\Users\95403\.gemini\antigravity\scratch\mes-scanner\backend\MesScanner.Backend\obj\Debug\net8.0\MesScanner.Backend.genruntimeconfig.cache
 C:\Users\95403\.gemini\antigravity\scratch\mes-scanner\backend\MesScanner.Backend\obj\Debug\net8.0\ref\MesScanner.Backend.dll
+C:\Users\95403\.gemini\antigravity\scratch\mes-scanner\backend\MesScanner.Backend\obj\Debug\net8.0\MesScanner.Backend.sourcelink.json
